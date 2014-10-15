@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -14,7 +15,14 @@ type watched struct {
 	cached    time.Time
 }
 
-var cache = make(map[interface{}]*watched)
+var (
+	cache     = make(map[interface{}]*watched)
+	cacheLock sync.RWMutex
+)
+
+var (
+	baseChanged time.Time
+)
 
 func RegisterFiles(key interface{}, filenames ...string) error {
 	pf := parseFiles
@@ -68,7 +76,7 @@ func Get(key interface{}) (*template.Template, error) {
 	}
 	t, ok := <-c
 	if !ok {
-		return nil, fmt.Errorf("watcher: template not found with key: %#q", key)
+		return nil, fmt.Errorf("watcher: template not found with key: %T=%v", key, key)
 	}
 
 	return t, nil
@@ -102,28 +110,35 @@ func watcher() {
 		case g := <-getChan:
 			go get(g.key, g.c)
 		case s := <-setChan:
-			//log.Println("SET", s.key, s.w.filenames, s.w.template.Name())
-			cache[s.key] = s.w
+			set(s.key, s.w)
 		}
 	}
 }
 
 var getChan = make(chan *cacheGet, 10)
-var setChan = make(chan *cacheSet)
+var setChan = make(chan *cacheSet, 10)
+
+func set(key interface{}, w *watched) {
+	cacheLock.Lock()
+	cache[key] = w
+	cacheLock.Unlock()
+}
 
 func get(key interface{}, c chan<- *template.Template) {
 	defer close(c)
+	cacheLock.RLock()
 	w, ok := cache[key]
+	cacheLock.RUnlock()
 	if !ok {
 		return
 	}
 	changed := getChangeTime(w.filenames...)
-	if changed.After(w.cached) {
+	if changed.After(w.cached) || (key != baseKey && baseChanged.After(w.cached)) {
 		var err error
 		if key == baseKey {
 			w, err = parseBaseFiles(w.filenames...)
 		} else {
-			w, err = parseFiles(w.filenames...)		
+			w, err = parseFiles(w.filenames...)
 		}
 		if err != nil {
 			log.Println(err)
@@ -134,7 +149,6 @@ func get(key interface{}, c chan<- *template.Template) {
 			w:   w,
 		}
 	}
-	//log.Println("GET", key, w.filenames, w.template.Name())
 	c <- w.template
 }
 
@@ -143,7 +157,7 @@ func init() {
 }
 
 func getChangeTime(filenames ...string) time.Time {
-	return time.Now()
+	return time.Now().Add(-time.Minute)
 }
 
 func parseFiles(filenames ...string) (*watched, error) {
@@ -170,6 +184,8 @@ func parseBaseFiles(filenames ...string) (*watched, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	baseChanged = time.Now().Add(time.Second)
 
 	return &watched{
 		filenames: filenames,
