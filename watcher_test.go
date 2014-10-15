@@ -31,10 +31,10 @@ func TestFiles(t *testing.T) {
 }
 
 func TestGlob(t *testing.T) {
-	if err := RegisterGlob(globKey, "test.html"); err != nil {
+	if err := RegisterBaseGlob("base.html"); err != nil {
 		t.Error(err)
 	}
-	if err := RegisterBaseGlob("base.html"); err != nil {
+	if err := RegisterGlob(globKey, "test.html"); err != nil {
 		t.Error(err)
 	}
 	temp, err := Get(globKey)

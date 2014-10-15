@@ -20,10 +20,6 @@ var (
 	cacheLock sync.RWMutex
 )
 
-var (
-	baseChanged time.Time
-)
-
 func RegisterFiles(key interface{}, filenames ...string) error {
 	w, err := parseFiles(filenames...)
 	if err != nil {
@@ -38,28 +34,10 @@ func RegisterFiles(key interface{}, filenames ...string) error {
 	return nil
 }
 
-func mergeTemplate(base *template.Template, t *template.Template) (*template.Template, error) {
-	nt, err := base.Clone()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, sub := range t.Templates() {
-		if _, err := nt.AddParseTree(sub.Name(), sub.Tree); err != nil {
-			return nil, err
-		}
-	}
-
-	return nt, nil
-}
-
 func RegisterGlob(key interface{}, pattern string) error {
-	filenames, err := filepath.Glob(pattern)
+	filenames, err := parseGlob(pattern)
 	if err != nil {
 		return err
-	}
-	if len(filenames) == 0 {
-		return fmt.Errorf("watcher: pattern matches no files: %#q", pattern)
 	}
 	return RegisterFiles(key, filenames...)
 }
@@ -97,14 +75,75 @@ func RegisterBaseFiles(filenames ...string) error {
 }
 
 func RegisterBaseGlob(pattern string) error {
-	filenames, err := filepath.Glob(pattern)
+	filenames, err := parseGlob(pattern)
 	if err != nil {
 		return err
 	}
-	if len(filenames) == 0 {
-		return fmt.Errorf("watcher: pattern matches no files: %#q", pattern)
-	}
 	return RegisterBaseFiles(filenames...)
+}
+
+func parseGlob(pattern string) ([]string, error) {
+	filenames, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if len(filenames) == 0 {
+		return nil, fmt.Errorf("watcher: pattern matches no files: %#q", pattern)
+	}
+	return filenames, nil
+}
+
+func parseFiles(filenames ...string) (*watched, error) {
+	t, err := template.ParseFiles(filenames...)
+	if err != nil {
+		return nil, err
+	}
+
+	if base, err := Get(baseKey); err == nil {
+		if t, err = mergeTemplate(base, t); err != nil {
+			return nil, err
+		}
+	}
+
+	return &watched{
+		filenames: filenames,
+		template:  t,
+		cached:    time.Now(),
+	}, nil
+}
+
+func mergeTemplate(base *template.Template, t *template.Template) (*template.Template, error) {
+	nt, err := base.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sub := range t.Templates() {
+		if _, err := nt.AddParseTree(sub.Name(), sub.Tree); err != nil {
+			return nil, err
+		}
+	}
+
+	return nt, nil
+}
+
+var (
+	baseChanged time.Time
+)
+
+func parseBaseFiles(filenames ...string) (*watched, error) {
+	t, err := template.ParseFiles(filenames...)
+	if err != nil {
+		return nil, err
+	}
+
+	baseChanged = time.Now().Add(time.Second)
+
+	return &watched{
+		filenames: filenames,
+		template:  t,
+		cached:    time.Now(),
+	}, nil
 }
 
 type cacheGet struct {
@@ -117,6 +156,9 @@ type cacheSet struct {
 	w   *watched
 }
 
+var getChan = make(chan *cacheGet, 10)
+var setChan = make(chan *cacheSet, 10)
+
 func watcher() {
 	for {
 		select {
@@ -127,9 +169,6 @@ func watcher() {
 		}
 	}
 }
-
-var getChan = make(chan *cacheGet, 10)
-var setChan = make(chan *cacheSet, 10)
 
 func set(key interface{}, w *watched) {
 	cacheLock.Lock()
@@ -165,44 +204,10 @@ func get(key interface{}, c chan<- *template.Template) {
 	c <- w.template
 }
 
-func init() {
-	go watcher()
-}
-
 func getChangeTime(filenames ...string) time.Time {
 	return time.Now().Add(-time.Minute)
 }
 
-func parseFiles(filenames ...string) (*watched, error) {
-	t, err := template.ParseFiles(filenames...)
-	if err != nil {
-		return nil, err
-	}
-
-	if base, err := Get(baseKey); err == nil {
-		if t, err = mergeTemplate(base, t); err != nil {
-			return nil, err
-		}
-	}
-
-	return &watched{
-		filenames: filenames,
-		template:  t,
-		cached:    time.Now(),
-	}, nil
-}
-
-func parseBaseFiles(filenames ...string) (*watched, error) {
-	t, err := template.ParseFiles(filenames...)
-	if err != nil {
-		return nil, err
-	}
-
-	baseChanged = time.Now().Add(time.Second)
-
-	return &watched{
-		filenames: filenames,
-		template:  t,
-		cached:    time.Now(),
-	}, nil
+func init() {
+	go watcher()
 }
