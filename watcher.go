@@ -1,0 +1,179 @@
+package watcher
+
+import (
+	"fmt"
+	"html/template"
+	"log"
+	"path/filepath"
+	"time"
+)
+
+type watched struct {
+	filenames []string
+	template  *template.Template
+	cached    time.Time
+}
+
+var cache = make(map[interface{}]*watched)
+
+func RegisterFiles(key interface{}, filenames ...string) error {
+	pf := parseFiles
+	if key == baseKey {
+		pf = parseBaseFiles
+	}
+	w, err := pf(filenames...)
+	if err != nil {
+		return err
+	}
+
+	setChan <- &cacheSet{
+		key: key,
+		w:   w,
+	}
+
+	return nil
+}
+
+func mergeTemplate(base *template.Template, t *template.Template) (*template.Template, error) {
+	nt, err := base.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sub := range t.Templates() {
+		if _, err := nt.AddParseTree(sub.Name(), sub.Tree); err != nil {
+			return nil, err
+		}
+	}
+
+	return nt, nil
+}
+
+func RegisterGlob(key interface{}, pattern string) error {
+	filenames, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	if len(filenames) == 0 {
+		return fmt.Errorf("watcher: pattern matches no files: %#q", pattern)
+	}
+	return RegisterFiles(key, filenames...)
+}
+
+func Get(key interface{}) (*template.Template, error) {
+	c := make(chan *template.Template, 1)
+	getChan <- &cacheGet{
+		key: key,
+		c:   c,
+	}
+	t, ok := <-c
+	if !ok {
+		return nil, fmt.Errorf("watcher: template not found with key: %#q", key)
+	}
+
+	return t, nil
+}
+
+type cacheKey int
+
+const baseKey cacheKey = 0
+
+func RegisterBaseFiles(filenames ...string) error {
+	return RegisterFiles(baseKey, filenames...)
+}
+
+func RegisterBaseGlob(pattern string) error {
+	return RegisterGlob(baseKey, pattern)
+}
+
+type cacheGet struct {
+	key interface{}
+	c   chan *template.Template
+}
+
+type cacheSet struct {
+	key interface{}
+	w   *watched
+}
+
+func watcher() {
+	for {
+		select {
+		case g := <-getChan:
+			go get(g.key, g.c)
+		case s := <-setChan:
+			//log.Println("SET", s.key, s.w.filenames, s.w.template.Name())
+			cache[s.key] = s.w
+		}
+	}
+}
+
+var getChan = make(chan *cacheGet, 10)
+var setChan = make(chan *cacheSet)
+
+func get(key interface{}, c chan<- *template.Template) {
+	defer close(c)
+	w, ok := cache[key]
+	if !ok {
+		return
+	}
+	changed := getChangeTime(w.filenames...)
+	if changed.After(w.cached) {
+		var err error
+		if key == baseKey {
+			w, err = parseBaseFiles(w.filenames...)
+		} else {
+			w, err = parseFiles(w.filenames...)		
+		}
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		setChan <- &cacheSet{
+			key: key,
+			w:   w,
+		}
+	}
+	//log.Println("GET", key, w.filenames, w.template.Name())
+	c <- w.template
+}
+
+func init() {
+	go watcher()
+}
+
+func getChangeTime(filenames ...string) time.Time {
+	return time.Now()
+}
+
+func parseFiles(filenames ...string) (*watched, error) {
+	t, err := template.ParseFiles(filenames...)
+	if err != nil {
+		return nil, err
+	}
+
+	if base, err := Get(baseKey); err == nil {
+		if t, err = mergeTemplate(base, t); err != nil {
+			return nil, err
+		}
+	}
+
+	return &watched{
+		filenames: filenames,
+		template:  t,
+		cached:    time.Now(),
+	}, nil
+}
+
+func parseBaseFiles(filenames ...string) (*watched, error) {
+	t, err := template.ParseFiles(filenames...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &watched{
+		filenames: filenames,
+		template:  t,
+		cached:    time.Now(),
+	}, nil
+}
