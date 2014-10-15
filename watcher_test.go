@@ -7,8 +7,10 @@ import (
 
 type key int
 
-const filesKey key = 0
-const globKey key = 1
+const (
+	filesKey key = iota
+	globKey
+)
 
 func TestFiles(t *testing.T) {
 	if err := RegisterFiles(filesKey, "test.html"); err != nil {
