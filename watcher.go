@@ -25,11 +25,7 @@ var (
 )
 
 func RegisterFiles(key interface{}, filenames ...string) error {
-	pf := parseFiles
-	if key == baseKey {
-		pf = parseBaseFiles
-	}
-	w, err := pf(filenames...)
+	w, err := parseFiles(filenames...)
 	if err != nil {
 		return err
 	}
@@ -87,11 +83,28 @@ type cacheKey int
 const baseKey cacheKey = 0
 
 func RegisterBaseFiles(filenames ...string) error {
-	return RegisterFiles(baseKey, filenames...)
+	w, err := parseBaseFiles(filenames...)
+	if err != nil {
+		return err
+	}
+
+	setChan <- &cacheSet{
+		key: baseKey,
+		w:   w,
+	}
+
+	return nil
 }
 
 func RegisterBaseGlob(pattern string) error {
-	return RegisterGlob(baseKey, pattern)
+	filenames, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	if len(filenames) == 0 {
+		return fmt.Errorf("watcher: pattern matches no files: %#q", pattern)
+	}
+	return RegisterBaseFiles(filenames...)
 }
 
 type cacheGet struct {

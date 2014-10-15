@@ -31,9 +31,6 @@ func TestFiles(t *testing.T) {
 }
 
 func TestGlob(t *testing.T) {
-	t.Skip()
-	cache = make(map[interface{}]*watched)
-
 	if err := RegisterGlob(globKey, "test.html"); err != nil {
 		t.Error(err)
 	}
