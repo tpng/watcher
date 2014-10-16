@@ -1,9 +1,19 @@
+/*
+Package watcher implements caching and live-reload of Go templates (htmp/template).
+
+It supports base template (optional) which is automatically added to each cached
+template.
+
+The package works by checking template file modification time on each get and
+reparse the template if neccessary.
+*/
 package watcher
 
 import (
 	"fmt"
 	"html/template"
 	"log"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -20,6 +30,8 @@ var (
 	cacheLock sync.RWMutex
 )
 
+// RegisterFiles adds the filenames to the cache under key for retrieval.
+// The template created is equivalent to template.ParseFiles(filenames...).
 func RegisterFiles(key interface{}, filenames ...string) error {
 	w, err := parseFiles(filenames...)
 	if err != nil {
@@ -34,6 +46,9 @@ func RegisterFiles(key interface{}, filenames ...string) error {
 	return nil
 }
 
+// RegisterGlob adds the files matched by the Glob pattern to the cache
+// under key for retrieval.
+// The template created is equivalent to template.ParseGlob(pattern).
 func RegisterGlob(key interface{}, pattern string) error {
 	filenames, err := parseGlob(pattern)
 	if err != nil {
@@ -42,6 +57,9 @@ func RegisterGlob(key interface{}, pattern string) error {
 	return RegisterFiles(key, filenames...)
 }
 
+// Get returns the template registered under key. Returns error if nothing
+// is found under key. Modifying the returned template will not change
+// the cached template.
 func Get(key interface{}) (*template.Template, error) {
 	c := make(chan *template.Template, 1)
 	getChan <- &cacheGet{
@@ -53,13 +71,16 @@ func Get(key interface{}) (*template.Template, error) {
 		return nil, fmt.Errorf("watcher: template not found with key: %T=%v", key, key)
 	}
 
-	return t, nil
+	return t.Clone()
 }
 
 type cacheKey int
 
 const baseKey cacheKey = 0
 
+// RegisterBaseFiles adds the filenames as a base template to be added to
+// each cached template.
+// The template created is equivalent to template.ParseFiles(filenames...).
 func RegisterBaseFiles(filenames ...string) error {
 	w, err := parseBaseFiles(filenames...)
 	if err != nil {
@@ -74,6 +95,9 @@ func RegisterBaseFiles(filenames ...string) error {
 	return nil
 }
 
+// RegisterBaseGlob adds files matched by the Glob pattern as a base template
+// to be added to each cached template.
+// The template created is equivalent to template.ParseGlob(pattern).
 func RegisterBaseGlob(pattern string) error {
 	filenames, err := parseGlob(pattern)
 	if err != nil {
@@ -127,17 +151,11 @@ func mergeTemplate(base *template.Template, t *template.Template) (*template.Tem
 	return nt, nil
 }
 
-var (
-	baseChanged time.Time
-)
-
 func parseBaseFiles(filenames ...string) (*watched, error) {
 	t, err := template.ParseFiles(filenames...)
 	if err != nil {
 		return nil, err
 	}
-
-	baseChanged = time.Now().Add(time.Second)
 
 	return &watched{
 		filenames: filenames,
@@ -185,7 +203,8 @@ func get(key interface{}, c chan<- *template.Template) {
 		return
 	}
 	changed := getChangeTime(w.filenames...)
-	if changed.After(w.cached) || (key != baseKey && baseChanged.After(w.cached)) {
+	baseChanged := getBaseChangeTime()
+	if w.cached.Before(changed) || (key != baseKey && w.cached.Before(baseChanged)) {
 		var err error
 		if key == baseKey {
 			w, err = parseBaseFiles(w.filenames...)
@@ -205,7 +224,34 @@ func get(key interface{}, c chan<- *template.Template) {
 }
 
 func getChangeTime(filenames ...string) time.Time {
-	return time.Now().Add(-time.Minute)
+	var changed time.Time
+	for _, f := range filenames {
+		fi, err := os.Stat(f)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		if fi.ModTime().After(changed) {
+			changed = fi.ModTime()
+		}
+	}
+	return changed
+}
+
+func getBaseChangeTime() time.Time {
+	var changed time.Time
+	cacheLock.RLock()
+	w, ok := cache[baseKey]
+	cacheLock.RUnlock()
+	if !ok {
+		return changed
+	}
+	changed = getChangeTime(w.filenames...)
+	if w.cached.After(changed) {
+		// solve same time issue (time not accurate enough)
+		return w.cached.Add(time.Nanosecond)
+	}
+	return changed
 }
 
 func init() {
