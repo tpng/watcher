@@ -241,15 +241,15 @@ func getChangeTime(filenames ...string) time.Time {
 func getBaseChangeTime() time.Time {
 	var changed time.Time
 	cacheLock.RLock()
-	w, ok := cache[baseKey]
+	base, ok := cache[baseKey]
 	cacheLock.RUnlock()
 	if !ok {
 		return changed
 	}
-	changed = getChangeTime(w.filenames...)
-	if w.cached.After(changed) {
+	changed = getChangeTime(base.filenames...)
+	if base.cached.After(changed) {
 		// solve same time issue (time not accurate enough)
-		return w.cached.Add(time.Nanosecond)
+		return base.cached.Add(time.Nanosecond)
 	}
 	return changed
 }
