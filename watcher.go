@@ -19,12 +19,14 @@ import (
 	"time"
 )
 
+// A watched struct keeps track of a cached template.
 type watched struct {
 	filenames []string
 	template  *template.Template
 	cached    time.Time
 }
 
+// The template cache and its mutex.
 var (
 	cache     = make(map[interface{}]*watched)
 	cacheLock sync.RWMutex
@@ -106,6 +108,8 @@ func RegisterBaseGlob(pattern string) error {
 	return RegisterBaseFiles(filenames...)
 }
 
+// parseGlob parses the glob pattern into a filenames slice.
+// Logic borrowed from template.ParseGlob.
 func parseGlob(pattern string) ([]string, error) {
 	filenames, err := filepath.Glob(pattern)
 	if err != nil {
@@ -117,6 +121,8 @@ func parseGlob(pattern string) ([]string, error) {
 	return filenames, nil
 }
 
+// parseFiles parses the filenames into a cached template.
+// The cached template will be merged with the base template.
 func parseFiles(filenames ...string) (*watched, error) {
 	t, err := template.ParseFiles(filenames...)
 	if err != nil {
@@ -136,6 +142,7 @@ func parseFiles(filenames ...string) (*watched, error) {
 	}, nil
 }
 
+// mergeTemplate returns a new template merging base and t.
 func mergeTemplate(base *template.Template, t *template.Template) (*template.Template, error) {
 	nt, err := base.Clone()
 	if err != nil {
@@ -151,6 +158,7 @@ func mergeTemplate(base *template.Template, t *template.Template) (*template.Tem
 	return nt, nil
 }
 
+// parseBaseFiles parses filenames into a cached base template.
 func parseBaseFiles(filenames ...string) (*watched, error) {
 	t, err := template.ParseFiles(filenames...)
 	if err != nil {
@@ -174,9 +182,13 @@ type cacheSet struct {
 	w   *watched
 }
 
-var getChan = make(chan *cacheGet, 10)
-var setChan = make(chan *cacheSet, 10)
+// Channels for serving cache requests.
+var (
+	getChan = make(chan *cacheGet, 10)
+	setChan = make(chan *cacheSet, 10)
+)
 
+// watcher is the loop for handling cache requests.
 func watcher() {
 	for {
 		select {
@@ -188,12 +200,15 @@ func watcher() {
 	}
 }
 
+// set puts w into the cache with key.
 func set(key interface{}, w *watched) {
 	cacheLock.Lock()
 	cache[key] = w
 	cacheLock.Unlock()
 }
 
+// get retrieves the cached template with key and send it to c.
+// If no cached templates found, c is closed without sending any template.
 func get(key interface{}, c chan<- *template.Template) {
 	defer close(c)
 	cacheLock.RLock()
@@ -223,6 +238,7 @@ func get(key interface{}, c chan<- *template.Template) {
 	c <- w.template
 }
 
+// getChangeTime returns the modified time for filenames.
 func getChangeTime(filenames ...string) time.Time {
 	var changed time.Time
 	for _, f := range filenames {
@@ -238,6 +254,7 @@ func getChangeTime(filenames ...string) time.Time {
 	return changed
 }
 
+// getBaseChangeTime returns the modified time of the base template.
 func getBaseChangeTime() time.Time {
 	var changed time.Time
 	cacheLock.RLock()
@@ -254,6 +271,7 @@ func getBaseChangeTime() time.Time {
 	return changed
 }
 
+// init starts the loop for handling cache requests.
 func init() {
 	go watcher()
 }
