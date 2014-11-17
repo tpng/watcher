@@ -10,6 +10,7 @@ type key int
 const (
 	filesKey key = iota
 	globKey
+	partialKey
 )
 
 func TestBaseFilesThenFiles(t *testing.T) {
@@ -64,7 +65,7 @@ func TestBaseGlobThenGlob(t *testing.T) {
 		t.Error(err)
 	}
 	b := new(bytes.Buffer)
-	if err := temp.Execute(b, nil); err != nil {
+	if err := temp.ExecuteTemplate(b, "base.html", nil); err != nil {
 		t.Error(err)
 	}
 	if bytes.Compare(b.Bytes(), []byte("Base Test")) != 0 {
@@ -84,10 +85,35 @@ func TestGlobThenBaseGlob(t *testing.T) {
 		t.Error(err)
 	}
 	b := new(bytes.Buffer)
-	if err := temp.Execute(b, nil); err != nil {
+	if err := temp.ExecuteTemplate(b, "base.html", nil); err != nil {
 		t.Error(err)
 	}
 	if bytes.Compare(b.Bytes(), []byte("Base Test")) != 0 {
 		t.Fatalf("expected %q, got %q", "Base Test", b.String())
+	}
+}
+
+func TestPartial(t *testing.T) {
+	DelimLeft, DelimRight = "[[", "]]"
+	if err := RegisterBaseGlob("partial/*.html"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterFiles(partialKey, "job.html"); err != nil {
+		t.Fatal(err)
+	}
+	temp, err := Get(partialKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := new(bytes.Buffer)
+	type Job struct {
+		ID    string
+		Title string
+	}
+	if err := temp.ExecuteTemplate(b, "job.html", &Job{ID: "1", Title: "Test"}); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Compare(b.Bytes(), []byte("1, Test")) != 0 {
+		t.Fatalf("expected %q, got %q", "1, Test", b.String())
 	}
 }
