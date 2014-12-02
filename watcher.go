@@ -29,6 +29,11 @@ type watched struct {
 var (
 	DelimLeft  string
 	DelimRight string
+	Funcs      = template.FuncMap{
+		"safeHTML": func(s string) template.HTML {
+			return template.HTML(s)
+		},
+	}
 )
 
 // The template cache and its mutex.
@@ -129,7 +134,7 @@ func parseGlob(pattern string) ([]string, error) {
 // parseFiles parses the filenames into a cached template.
 // The cached template will be merged with the base template.
 func parseFiles(filenames ...string) (*watched, error) {
-	t := template.New(filenames[0]).Delims(DelimLeft, DelimRight)
+	t := template.New(filepath.Base(filenames[0])).Delims(DelimLeft, DelimRight).Funcs(Funcs)
 	_, err := t.ParseFiles(filenames...)
 	if err != nil {
 		return nil, err
@@ -166,7 +171,7 @@ func mergeTemplate(base *template.Template, t *template.Template) (*template.Tem
 
 // parseBaseFiles parses filenames into a cached base template.
 func parseBaseFiles(filenames ...string) (*watched, error) {
-	t := template.New(filenames[0]).Delims(DelimLeft, DelimRight)
+	t := template.New(filepath.Base(filenames[0])).Delims(DelimLeft, DelimRight).Funcs(Funcs)
 	_, err := t.ParseFiles(filenames...)
 	if err != nil {
 		return nil, err
